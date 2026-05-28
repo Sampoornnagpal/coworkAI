@@ -1,0 +1,9 @@
+model_list:
+  - model_name: local-llama
+    litellm_params:
+      model: ollama/llama3.1
+      api_base: http://host.docker.internal:11434
+
+general_settings:
+  master_key: sk-cowork-master-key
+  store_model_in_db: true
