@@ -1,0 +1,71 @@
+<USER_REQUEST>
+# Antigravity Build Prompt — LLM Configurator (v2.2, consolidated — start here)
+
+> Paste this whole document into a fresh Antigravity chat opened in the `ai-cowork` folder.
+> Any earlier LLM-configurator plan (Docker proxy + Postgres + admin approval) is CANCELLED. Step A.0 cleans up if any of it exists on disk.
+
+---
+
+## What we are building
+
+**Step 4 of a larger product: an LLM Configurator**, deployed as locally callable endpoints. A user fills a form:
+
+1. **Usecase name** + **Config name** (e.g. `doc_summariser` + `LLM_config`)
+2. **Picks models** from the full list of LiteLLM-supported models (no admin approval flow)
+3. **Sets priority order** per operation (1 = primary, 2 = first fallback, …)
+4. **Sets restrictions**: TPM, RPM, TPR (max tokens per request), guardrail toggles
+
+Saving produces `configs/<usecasename>_<configname>.json` and the config is **instantly live** at:
+
+```
+POST http://localhost:8001/llm/<usecasename>_<configname>/chat
+POST http://localhost:8001/llm/<usecasename>_<configname>/vision
+POST http://localhost:8001/llm/<usecasename>_<configname>/embeddings
+POST http://localhost:8001/llm/<usecasename>_<configname>/images/generations
+POST http://localhost:8001/llm/<usecasename>_<configname>/audio/transcriptions
+POST http://localhost:8001/llm/<usecasename>_<configname>/audio/speech
+GET  http://localhost:8001/llm/<usecasename>_<configname>/capabilities
+GET  http://localhost:8001/llm/<usecasename>_<configname>/usage
+```
+
+…where each operation route only *works* if the config contains a model supporting that operation (details below).
+
+**Engine: LiteLLM Router (Python SDK), in-process. No Docker. No LiteLLM Proxy server. No Postgres. Database: SQLite.**
+**Frontend: a new "LLM Configurator" section added to the existing ai-cowork React app.**
+**Test providers:** Ollama at `http://localhost:11434` (`mistral` pulled; `llava` optional for local vision; `nomic-embed-text` optional for local embeddings) and a Gemini free-tier key via env `GEMINI_API_KEY`.
+
+---
+
+## THE CORE MECHANISM
+<truncated 13734 bytes>
+ list with up/down arrows (no drag-drop lib — deps frozen);
+   - restrictions: TPM / RPM / TPR inputs; guardrail toggles (inert ones labeled "coming soon");
+   - Save → POST → navigate to detail.
+3. **Config detail** (`/llm-configurator/:fullName`) —
+   - the config rendered readably;
+   - a **"Supported Endpoints" table from `GET /llm/{name}/capabilities`** (mirrors the LiteLLM provider-docs look), each row = full URL + copy button;
+   - a **Test panel** (textarea → `/llm/{name}/chat`, renders reply + `model_used`);
+   - usage table from `/usage` (per-agent rows when agent_id exists);
+   - Edit + Delete.
+
+## 🛑 STOP CHECKPOINT B
+1. Sidebar shows the section; all three pages render in the app's existing style.
+2. Build a config entirely through the UI → appears in list → file exists on disk → its endpoint answers.
+3. Detail page shows the capabilities table; Test panel returns a live reply with `model_used`.
+4. Usage table populates after test calls.
+5. No console errors; existing sections (Chat, Models, Admin) untouched and working.
+
+Report results. 🛑
+
+---
+
+## Landmines
+- **Gemini model IDs** (`gemini/gemini-2.5-flash`, `gemini/text-embedding-004`) are placeholders — confirm against what the free-tier key actually serves before Checkpoint A. Google's free tier also enforces its own RPM; keep prompts short, treat Ollama as the dependable demo path.
+- **Ollama vision/embeddings**: `mistral` does neither. `ollama pull llava` for local vision, `ollama pull nomic-embed-text` for local embeddings (mode `embedding`, works as a fallback in the embedding chain).
+- **`litellm.model_cost` is huge** — filter/group everywhere; never render or return it raw.
+- **No cross-project imports** — copy the small rate-limiter pattern into this folder so it stays liftable into another repo.
+- **Images/audio endpoints**: generic code, no free test provider — comment honestly, never fake-verify.
+</USER_REQUEST>
+<ADDITIONAL_METADATA>
+The current local time is: 2026-06-10T11:57:46+05:30.
+</ADDITIONAL_METADATA>

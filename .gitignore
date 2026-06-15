@@ -6,3 +6,5 @@ node_modules/
 dist/
 venv/
 *.db
+llm-configurator/configs/
+llm-configurator/backend/*.log
