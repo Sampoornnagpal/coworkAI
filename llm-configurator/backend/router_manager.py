@@ -26,6 +26,10 @@ def build_router_for_config(config: ConfigResponse):
     Builds a LiteLLM Router for the given config and stores it in the registry.
     This overwrites any existing router for the same full_name.
     """
+    import db
+    global_models_list = db.get_global_models()
+    global_models = {gm["litellm_model"]: gm for gm in global_models_list}
+
     router_model_list = []
     
     for op, models in config.operations.items():
@@ -36,10 +40,15 @@ def build_router_for_config(config: ConfigResponse):
         internal_model_name = f"{config.full_name}::{op}"
         
         for m in models:
-            # Resolve env var if specified
-            api_key = None
-            if m.api_key_env:
+            gm = global_models.get(m.litellm_model)
+            api_key = gm.get("api_key") if gm else None
+            api_base = gm.get("api_base") if gm else None
+
+            # fallback to old behavior if not found in db
+            if not api_key and m.api_key_env:
                 api_key = os.environ.get(m.api_key_env)
+            if not api_base and m.api_base:
+                api_base = m.api_base
                 
             litellm_params = {
                 "model": m.litellm_model,
@@ -47,8 +56,8 @@ def build_router_for_config(config: ConfigResponse):
             
             if api_key:
                 litellm_params["api_key"] = api_key
-            if m.api_base:
-                litellm_params["api_base"] = m.api_base
+            if api_base:
+                litellm_params["api_base"] = api_base
                 
             litellm_params["tpm"] = m.tpm if m.tpm is not None else config.restrictions.tpm
             litellm_params["rpm"] = m.rpm if m.rpm is not None else config.restrictions.rpm
@@ -67,17 +76,22 @@ def build_router_for_config(config: ConfigResponse):
         _custom_op_descriptions[config.full_name][op_name] = custom_op.description
         
         for m in custom_op.models:
-            api_key = None
-            if m.api_key_env:
+            gm = global_models.get(m.litellm_model)
+            api_key = gm.get("api_key") if gm else None
+            api_base = gm.get("api_base") if gm else None
+
+            if not api_key and m.api_key_env:
                 api_key = os.environ.get(m.api_key_env)
+            if not api_base and m.api_base:
+                api_base = m.api_base
                 
             litellm_params = {
                 "model": m.litellm_model,
             }
             if api_key:
                 litellm_params["api_key"] = api_key
-            if m.api_base:
-                litellm_params["api_base"] = m.api_base
+            if api_base:
+                litellm_params["api_base"] = api_base
                 
             litellm_params["tpm"] = m.tpm if m.tpm is not None else config.restrictions.tpm
             litellm_params["rpm"] = m.rpm if m.rpm is not None else config.restrictions.rpm

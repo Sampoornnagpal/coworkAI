@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import configApi from './configApi';
@@ -10,7 +10,8 @@ import {
   ChevronUpIcon,
   ChevronDownIcon,
   EyeIcon,
-  TrashIcon
+  TrashIcon,
+  InformationCircleIcon
 } from '@heroicons/react/24/outline';
 
 const RESERVED_SEGMENTS = ['chat', 'completion', 'embedding', 'image_generation', 'audio_transcription', 'audio_speech', 'vision', 'completions', 'embeddings', 'images', 'audio', 'usage', 'capabilities'];
@@ -29,7 +30,7 @@ export default function ConfiguratorBuilder() {
   const [restrictions, setRestrictions] = useState({ tpm: 10000, rpm: 10, tpr: 1000 });
   const [guardrails, setGuardrails] = useState({ pii_masking: false, profanity_filter: false });
   
-  // Operations mapping: mode -> array of { litellm_model, api_key_env, api_base }
+  // Operations mapping: mode -> array of { litellm_model, tpm, rpm }
   const [operations, setOperations] = useState({});
   const [customOperations, setCustomOperations] = useState({});
 
@@ -40,15 +41,26 @@ export default function ConfiguratorBuilder() {
   
   // Catalog models
   const [catalog, setCatalog] = useState({}); // { mode: [models] }
+  const [globalModelsMap, setGlobalModelsMap] = useState({});
   const [searchTerms, setSearchTerms] = useState({}); // { mode: term }
 
   useEffect(() => {
     const loadCatalog = async () => {
       try {
-        // Fetch operations spec to dynamically build sections
-        const { data: opData } = await configApi.get('/catalog/operations');
-        const activeModes = opData.filter(op => !op.derived).map(op => op.operation);
+        const [opsRes, globalsRes] = await Promise.all([
+          configApi.get('/catalog/operations'),
+          configApi.get('/catalog/global_models')
+        ]);
+        
+        const activeModes = opsRes.data.filter(op => !op.derived).map(op => op.operation);
         setOperationModes(activeModes);
+
+        const gMap = {};
+        globalsRes.data.forEach(g => {
+          gMap[g.litellm_model] = g;
+        });
+        setGlobalModelsMap(gMap);
+
         const newCatalog = {};
         await Promise.all(activeModes.map(async (mode) => {
           try {
@@ -56,7 +68,6 @@ export default function ConfiguratorBuilder() {
             newCatalog[mode] = data;
           } catch (err) {
             newCatalog[mode] = [];
-            setMsg(prev => prev || { ok: false, text: `Failed to load models for ${mode}` });
           }
         }));
         setCatalog(newCatalog);
@@ -78,8 +89,6 @@ export default function ConfiguratorBuilder() {
         Object.entries(data.operations || {}).forEach(([mode, opArray]) => {
           newOps[mode] = [...opArray].sort((a, b) => a.priority - b.priority).map(item => ({
             litellm_model: item.litellm_model,
-            api_key_env: item.api_key_env || '',
-            api_base: item.api_base || '',
             rpm: item.rpm != null ? String(item.rpm) : '',
             tpm: item.tpm != null ? String(item.tpm) : ''
           }));
@@ -92,8 +101,6 @@ export default function ConfiguratorBuilder() {
             description: opData.description || '',
             models: [...(opData.models || [])].sort((a, b) => a.priority - b.priority).map(item => ({
               litellm_model: item.litellm_model,
-              api_key_env: item.api_key_env || '',
-              api_base: item.api_base || '',
               rpm: item.rpm != null ? String(item.rpm) : '',
               tpm: item.tpm != null ? String(item.tpm) : ''
             }))
@@ -114,6 +121,44 @@ export default function ConfiguratorBuilder() {
     });
   }, [isEdit, fullName]);
 
+  // Lookup max TPR across all selected models
+  const modelLookup = useMemo(() => {
+    const lookup = {};
+    Object.values(catalog).flat().forEach(m => {
+      lookup[m.model_key] = m;
+    });
+    return lookup;
+  }, [catalog]);
+
+  const calculatedTpr = useMemo(() => {
+    let minTpr = Infinity;
+    Object.values(operations).flat().forEach(op => {
+      const m = modelLookup[op.litellm_model];
+      if (m && m.max_output_tokens) {
+        minTpr = Math.min(minTpr, m.max_output_tokens);
+      }
+    });
+    Object.values(customOperations).forEach(cop => {
+      cop.models.forEach(op => {
+        const m = modelLookup[op.litellm_model];
+        if (m && m.max_output_tokens) {
+          minTpr = Math.min(minTpr, m.max_output_tokens);
+        }
+      });
+    });
+    return minTpr === Infinity ? 1000 : minTpr;
+  }, [operations, customOperations, modelLookup]);
+
+  useEffect(() => {
+    const tpm = parseInt(restrictions.tpm) || 0;
+    let rpm = restrictions.rpm;
+    if (calculatedTpr > 0) {
+      rpm = Math.max(1, Math.floor(tpm / calculatedTpr));
+    }
+    setRestrictions(prev => ({ ...prev, tpr: calculatedTpr, rpm }));
+  }, [calculatedTpr, restrictions.tpm]);
+
+
   const handleSave = async (e) => {
     e.preventDefault();
     setSaving(true);
@@ -124,10 +169,8 @@ export default function ConfiguratorBuilder() {
     Object.entries(operations).forEach(([mode, opArray]) => {
       if (opArray.length > 0) {
         finalOps[mode] = opArray.map((item, idx) => ({
-          ...item,
+          litellm_model: item.litellm_model,
           priority: idx + 1,
-          api_key_env: item.api_key_env || null,
-          api_base: item.api_base || null,
           rpm: item.rpm ? parseInt(item.rpm) : null,
           tpm: item.tpm ? parseInt(item.tpm) : null
         }));
@@ -140,10 +183,8 @@ export default function ConfiguratorBuilder() {
         finalCustomOps[name] = {
           description: opData.description,
           models: opData.models.map((item, idx) => ({
-            ...item,
+            litellm_model: item.litellm_model,
             priority: idx + 1,
-            api_key_env: item.api_key_env || null,
-            api_base: item.api_base || null,
             rpm: item.rpm ? parseInt(item.rpm) : null,
             tpm: item.tpm ? parseInt(item.tpm) : null
           }))
@@ -195,7 +236,7 @@ export default function ConfiguratorBuilder() {
       }
       return {
         ...prev,
-        [mode]: [...current, { litellm_model: modelObj.model_key, api_key_env: '', api_base: '', rpm: '', tpm: '' }]
+        [mode]: [...current, { litellm_model: modelObj.model_key, rpm: '', tpm: '' }]
       };
     });
   };
@@ -212,13 +253,9 @@ export default function ConfiguratorBuilder() {
     setOperations(prev => {
       const current = [...(prev[mode] || [])];
       if (direction === 'up' && idx > 0) {
-        const temp = current[idx];
-        current[idx] = current[idx - 1];
-        current[idx - 1] = temp;
+        const temp = current[idx]; current[idx] = current[idx - 1]; current[idx - 1] = temp;
       } else if (direction === 'down' && idx < current.length - 1) {
-        const temp = current[idx];
-        current[idx] = current[idx + 1];
-        current[idx + 1] = temp;
+        const temp = current[idx]; current[idx] = current[idx + 1]; current[idx + 1] = temp;
       }
       return { ...prev, [mode]: current };
     });
@@ -227,7 +264,19 @@ export default function ConfiguratorBuilder() {
   const updateModelField = (mode, idx, field, val) => {
     setOperations(prev => {
       const current = [...(prev[mode] || [])];
-      current[idx] = { ...current[idx], [field]: val };
+      let newOp = { ...current[idx], [field]: val };
+      
+      if (field === 'tpm') {
+        const tpmVal = parseInt(val) || 0;
+        const m = modelLookup[newOp.litellm_model];
+        if (tpmVal > 0 && m && m.max_output_tokens) {
+          newOp.rpm = Math.max(1, Math.floor(tpmVal / m.max_output_tokens)).toString();
+        } else if (!val) {
+          newOp.rpm = '';
+        }
+      }
+
+      current[idx] = newOp;
       return { ...prev, [mode]: current };
     });
   };
@@ -249,7 +298,19 @@ export default function ConfiguratorBuilder() {
   const updateCustomOpModelField = (name, idx, field, val) => {
     setCustomOperations(prev => {
       const current = [...prev[name].models];
-      current[idx] = { ...current[idx], [field]: val };
+      let newOp = { ...current[idx], [field]: val };
+
+      if (field === 'tpm') {
+        const tpmVal = parseInt(val) || 0;
+        const m = modelLookup[newOp.litellm_model];
+        if (tpmVal > 0 && m && m.max_output_tokens) {
+          newOp.rpm = Math.max(1, Math.floor(tpmVal / m.max_output_tokens)).toString();
+        } else if (!val) {
+          newOp.rpm = '';
+        }
+      }
+
+      current[idx] = newOp;
       return { ...prev, [name]: { ...prev[name], models: current } };
     });
   };
@@ -278,7 +339,7 @@ export default function ConfiguratorBuilder() {
     setCustomOperations(prev => {
       const current = prev[name].models;
       if (current.some(op => op.litellm_model === modelObj.model_key)) return prev;
-      return { ...prev, [name]: { ...prev[name], models: [...current, { litellm_model: modelObj.model_key, api_key_env: '', api_base: '', rpm: '', tpm: '' }] } };
+      return { ...prev, [name]: { ...prev[name], models: [...current, { litellm_model: modelObj.model_key, rpm: '', tpm: '' }] } };
     });
   };
 
@@ -381,47 +442,13 @@ export default function ConfiguratorBuilder() {
             </AnimatePresence>
           </div>
 
-          {/* Restrictions Section */}
-          <div className="bg-white p-6 rounded-xl border border-border shadow-sm">
-            <h2 className="text-base font-semibold text-text-primary mb-4">Restrictions</h2>
-            <div className="grid grid-cols-3 gap-6">
-              <div>
-                <label className="block text-sm font-medium text-text-secondary mb-1">Tokens Per Minute (TPM)</label>
-                <input type="number" required min="1" value={restrictions.tpm} onChange={e => setRestrictions({...restrictions, tpm: parseInt(e.target.value) || 1})} className="w-full px-4 py-2 border border-border rounded-btn text-sm bg-background" />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-text-secondary mb-1">Requests Per Minute (RPM)</label>
-                <input type="number" required min="1" value={restrictions.rpm} onChange={e => setRestrictions({...restrictions, rpm: parseInt(e.target.value) || 1})} className="w-full px-4 py-2 border border-border rounded-btn text-sm bg-background" />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-text-secondary mb-1">Tokens Per Request (TPR)</label>
-                <input type="number" required min="1" value={restrictions.tpr} onChange={e => setRestrictions({...restrictions, tpr: parseInt(e.target.value) || 1})} className="w-full px-4 py-2 border border-border rounded-btn text-sm bg-background" />
-              </div>
-            </div>
-          </div>
-
-          {/* Guardrails Section */}
-          <div className="bg-white p-6 rounded-xl border border-border shadow-sm">
-            <h2 className="text-base font-semibold text-text-primary mb-4">Guardrails</h2>
-            <div className="flex gap-8">
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input type="checkbox" checked={guardrails.pii_masking} onChange={e => setGuardrails({...guardrails, pii_masking: e.target.checked})} className="w-4 h-4 text-primary rounded border-gray-300 focus:ring-primary" />
-                <span className="text-sm font-medium text-text-secondary">PII Masking</span>
-              </label>
-              <label className="flex items-center gap-2 opacity-60 cursor-not-allowed">
-                <input type="checkbox" disabled checked={guardrails.profanity_filter} className="w-4 h-4 text-primary rounded border-gray-300 focus:ring-primary" />
-                <span className="text-sm font-medium text-text-secondary">Profanity Filter <span className="text-[10px] bg-surface px-1.5 py-0.5 rounded text-text-tertiary uppercase ml-1">Coming Soon</span></span>
-              </label>
-            </div>
-          </div>
-
           {/* Operations Section */}
           <div className="space-y-6">
             <h2 className="text-lg font-bold text-text-primary">Operations Fallback Chains</h2>
             
             {operationModes.map(mode => {
               const currentOps = operations[mode] || [];
-              const availableModels = catalog[mode] || [];
+              const availableModels = (catalog[mode] || []).filter(m => globalModelsMap[m.model_key]);
               
               // Group available models by provider
               const searchTerm = (searchTerms[mode] || '').toLowerCase();
@@ -452,36 +479,39 @@ export default function ConfiguratorBuilder() {
                         </div>
                       ) : (
                         <div className="space-y-2">
-                          {currentOps.map((op, idx) => (
-                            <div key={idx} className="p-3 border border-border rounded-lg bg-background flex flex-col gap-2">
-                              <div className="flex items-center justify-between">
-                                <div className="flex items-center gap-2">
-                                  <span className="w-5 h-5 flex items-center justify-center bg-primary text-white text-xs font-bold rounded-full">{idx + 1}</span>
-                                  <span className="font-semibold text-sm text-text-primary">{op.litellm_model}</span>
+                          {currentOps.map((op, idx) => {
+                            const mData = modelLookup[op.litellm_model];
+                            return (
+                              <div key={idx} className="p-3 border border-border rounded-lg bg-background flex flex-col gap-2">
+                                <div className="flex items-center justify-between">
+                                  <div className="flex items-center gap-2">
+                                    <span className="w-5 h-5 flex items-center justify-center bg-primary text-white text-xs font-bold rounded-full">{idx + 1}</span>
+                                    <span className="font-semibold text-sm text-text-primary truncate" title={op.litellm_model}>{op.litellm_model}</span>
+                                  </div>
+                                  <div className="flex items-center gap-1 shrink-0">
+                                    <button type="button" onClick={() => moveModel(mode, idx, 'up')} disabled={idx === 0} className="p-1 text-text-tertiary hover:text-primary disabled:opacity-30">
+                                      <ChevronUpIcon className="w-4 h-4" />
+                                    </button>
+                                    <button type="button" onClick={() => moveModel(mode, idx, 'down')} disabled={idx === currentOps.length - 1} className="p-1 text-text-tertiary hover:text-primary disabled:opacity-30">
+                                      <ChevronDownIcon className="w-4 h-4" />
+                                    </button>
+                                    <button type="button" onClick={() => removeModelFromOperation(mode, idx)} className="p-1 text-text-tertiary hover:text-danger">
+                                      <TrashIcon className="w-4 h-4" />
+                                    </button>
+                                  </div>
                                 </div>
-                                <div className="flex items-center gap-1">
-                                  <button type="button" onClick={() => moveModel(mode, idx, 'up')} disabled={idx === 0} className="p-1 text-text-tertiary hover:text-primary disabled:opacity-30">
-                                    <ChevronUpIcon className="w-4 h-4" />
-                                  </button>
-                                  <button type="button" onClick={() => moveModel(mode, idx, 'down')} disabled={idx === currentOps.length - 1} className="p-1 text-text-tertiary hover:text-primary disabled:opacity-30">
-                                    <ChevronDownIcon className="w-4 h-4" />
-                                  </button>
-                                  <button type="button" onClick={() => removeModelFromOperation(mode, idx)} className="p-1 text-text-tertiary hover:text-danger">
-                                    <TrashIcon className="w-4 h-4" />
-                                  </button>
+                                {mData && mData.max_output_tokens && (
+                                  <div className="text-[10px] font-mono text-text-secondary bg-surface px-1.5 py-0.5 rounded border border-border self-start">
+                                    Max TPR: {mData.max_output_tokens}
+                                  </div>
+                                )}
+                                <div className="grid grid-cols-2 gap-2 mt-1">
+                                  <input type="number" min="1" placeholder="TPM (optional)" title="Tokens Per Minute" value={op.tpm} onChange={e => updateModelField(mode, idx, 'tpm', e.target.value)} className="w-full px-2 py-1 border border-border rounded text-xs bg-white focus:border-primary" />
+                                  <input type="text" disabled placeholder="RPM (auto)" title="Calculated as TPM / Max TPR" value={op.rpm ? op.rpm + ' RPM' : ''} className="w-full px-2 py-1 border border-border rounded text-xs bg-surface text-text-tertiary cursor-not-allowed" />
                                 </div>
                               </div>
-                              <div className="grid grid-cols-2 gap-2 mt-1">
-                                <input type="text" placeholder="api_key_env (optional)" value={op.api_key_env} onChange={e => updateModelField(mode, idx, 'api_key_env', e.target.value)} className="w-full px-2 py-1 border border-border rounded text-xs bg-white focus:border-primary" />
-                                <input type="text" placeholder="api_base (optional)" value={op.api_base} onChange={e => updateModelField(mode, idx, 'api_base', e.target.value)} className="w-full px-2 py-1 border border-border rounded text-xs bg-white focus:border-primary" />
-                              </div>
-                              <div className="grid grid-cols-2 gap-2 mt-1 relative group/hint">
-                                <input type="number" min="1" placeholder="RPM limit (optional)" value={op.rpm} onChange={e => updateModelField(mode, idx, 'rpm', e.target.value)} className="w-full px-2 py-1 border border-border rounded text-xs bg-white focus:border-primary" />
-                                <input type="number" min="1" placeholder="TPM limit (optional)" value={op.tpm} onChange={e => updateModelField(mode, idx, 'tpm', e.target.value)} className="w-full px-2 py-1 border border-border rounded text-xs bg-white focus:border-primary" />
-                                <div className="absolute top-full left-0 hidden group-hover/hint:block mt-1 p-1 bg-gray-800 text-white text-[10px] rounded shadow-lg z-10 w-full whitespace-normal">soft limit — affects fallback routing; config RPM is the hard cap</div>
-                              </div>
-                            </div>
-                          ))}
+                            );
+                          })}
                         </div>
                       )}
                     </div>
@@ -489,7 +519,7 @@ export default function ConfiguratorBuilder() {
                     {/* Catalog Picker */}
                     <div className="space-y-3 border-l border-border pl-6">
                       <div className="flex items-center justify-between">
-                        <h4 className="text-sm font-medium text-text-secondary">Model Catalog</h4>
+                        <h4 className="text-sm font-medium text-text-secondary">Configured Models</h4>
                       </div>
                       <input 
                         type="text" 
@@ -529,21 +559,7 @@ export default function ConfiguratorBuilder() {
                         ))}
                         {Object.keys(providerGroups).length === 0 && (
                           <div className="text-center pt-4">
-                            <div className="text-xs text-text-tertiary mb-3">No models match your search.</div>
-                            {searchTerm && (
-                              currentOps.some(op => op.litellm_model === searchTerms[mode])
-                                ? <p className="text-xs text-success font-medium">✓ This model is already in your chain.</p>
-                                : <button 
-                                    type="button" 
-                                    onClick={() => {
-                                      addModelToOperation(mode, { model_key: searchTerms[mode], provider: 'custom', supports_vision: false });
-                                      setSearchTerms({...searchTerms, [mode]: ''});
-                                    }}
-                                    className="px-3 py-1.5 bg-primary/10 text-primary rounded-md text-xs font-medium hover:bg-primary/20 transition-colors border border-primary/20"
-                                  >
-                                    Add "{searchTerms[mode]}" as custom model
-                                  </button>
-                            )}
+                            <div className="text-xs text-text-tertiary mb-3">No configured models match your search. Ensure you have added models in the LLM Catalogue.</div>
                           </div>
                         )}
                       </div>
@@ -569,7 +585,7 @@ export default function ConfiguratorBuilder() {
               </div>
             ) : (
               Object.entries(customOperations).map(([opName, opData]) => {
-                const availableModels = catalog['chat'] || [];
+                const availableModels = (catalog['chat'] || []).filter(m => globalModelsMap[m.model_key]);
                 const searchTerm = (searchTerms[opName] || '').toLowerCase();
                 const filteredModels = availableModels.filter(m => m.model_key && m.model_key.toLowerCase().includes(searchTerm));
                 const providerGroups = {};
@@ -615,36 +631,39 @@ export default function ConfiguratorBuilder() {
                           <div className="p-4 border border-dashed border-border rounded-lg text-sm text-text-tertiary text-center bg-background">No models selected.</div>
                         ) : (
                           <div className="space-y-2">
-                            {opData.models.map((op, idx) => (
-                              <div key={idx} className="p-3 border border-border rounded-lg bg-background flex flex-col gap-2">
-                                <div className="flex items-center justify-between">
-                                  <div className="flex items-center gap-2">
-                                    <span className="w-5 h-5 flex items-center justify-center bg-primary text-white text-xs font-bold rounded-full">{idx + 1}</span>
-                                    <span className="font-semibold text-sm text-text-primary">{op.litellm_model}</span>
+                            {opData.models.map((op, idx) => {
+                              const mData = modelLookup[op.litellm_model];
+                              return (
+                                <div key={idx} className="p-3 border border-border rounded-lg bg-background flex flex-col gap-2">
+                                  <div className="flex items-center justify-between">
+                                    <div className="flex items-center gap-2">
+                                      <span className="w-5 h-5 flex items-center justify-center bg-primary text-white text-xs font-bold rounded-full">{idx + 1}</span>
+                                      <span className="font-semibold text-sm text-text-primary truncate" title={op.litellm_model}>{op.litellm_model}</span>
+                                    </div>
+                                    <div className="flex items-center gap-1 shrink-0">
+                                      <button type="button" onClick={() => moveCustomModel(opName, idx, 'up')} disabled={idx === 0} className="p-1 text-text-tertiary hover:text-primary disabled:opacity-30"><ChevronUpIcon className="w-4 h-4" /></button>
+                                      <button type="button" onClick={() => moveCustomModel(opName, idx, 'down')} disabled={idx === opData.models.length - 1} className="p-1 text-text-tertiary hover:text-primary disabled:opacity-30"><ChevronDownIcon className="w-4 h-4" /></button>
+                                      <button type="button" onClick={() => removeCustomModel(opName, idx)} className="p-1 text-text-tertiary hover:text-danger"><TrashIcon className="w-4 h-4" /></button>
+                                    </div>
                                   </div>
-                                  <div className="flex items-center gap-1">
-                                    <button type="button" onClick={() => moveCustomModel(opName, idx, 'up')} disabled={idx === 0} className="p-1 text-text-tertiary hover:text-primary disabled:opacity-30"><ChevronUpIcon className="w-4 h-4" /></button>
-                                    <button type="button" onClick={() => moveCustomModel(opName, idx, 'down')} disabled={idx === opData.models.length - 1} className="p-1 text-text-tertiary hover:text-primary disabled:opacity-30"><ChevronDownIcon className="w-4 h-4" /></button>
-                                    <button type="button" onClick={() => removeCustomModel(opName, idx)} className="p-1 text-text-tertiary hover:text-danger"><TrashIcon className="w-4 h-4" /></button>
+                                  {mData && mData.max_output_tokens && (
+                                    <div className="text-[10px] font-mono text-text-secondary bg-surface px-1.5 py-0.5 rounded border border-border self-start">
+                                      Max TPR: {mData.max_output_tokens}
+                                    </div>
+                                  )}
+                                  <div className="grid grid-cols-2 gap-2 mt-1">
+                                    <input type="number" min="1" placeholder="TPM (optional)" value={op.tpm} onChange={e => updateCustomOpModelField(opName, idx, 'tpm', e.target.value)} className="w-full px-2 py-1 border border-border rounded text-xs bg-white focus:border-primary" />
+                                    <input type="text" disabled placeholder="RPM (auto)" value={op.rpm ? op.rpm + ' RPM' : ''} className="w-full px-2 py-1 border border-border rounded text-xs bg-surface text-text-tertiary cursor-not-allowed" />
                                   </div>
                                 </div>
-                                <div className="grid grid-cols-2 gap-2 mt-1">
-                                  <input type="text" placeholder="api_key_env" value={op.api_key_env} onChange={e => updateCustomOpModelField(opName, idx, 'api_key_env', e.target.value)} className="w-full px-2 py-1 border border-border rounded text-xs bg-white focus:border-primary" />
-                                  <input type="text" placeholder="api_base" value={op.api_base} onChange={e => updateCustomOpModelField(opName, idx, 'api_base', e.target.value)} className="w-full px-2 py-1 border border-border rounded text-xs bg-white focus:border-primary" />
-                                </div>
-                                <div className="grid grid-cols-2 gap-2 mt-1 relative group/hint">
-                                  <input type="number" min="1" placeholder="RPM limit" value={op.rpm} onChange={e => updateCustomOpModelField(opName, idx, 'rpm', e.target.value)} className="w-full px-2 py-1 border border-border rounded text-xs bg-white focus:border-primary" />
-                                  <input type="number" min="1" placeholder="TPM limit" value={op.tpm} onChange={e => updateCustomOpModelField(opName, idx, 'tpm', e.target.value)} className="w-full px-2 py-1 border border-border rounded text-xs bg-white focus:border-primary" />
-                                  <div className="absolute top-full left-0 hidden group-hover/hint:block mt-1 p-1 bg-gray-800 text-white text-[10px] rounded shadow-lg z-10 w-full whitespace-normal">soft limit — affects fallback routing; config RPM is the hard cap</div>
-                                </div>
-                              </div>
-                            ))}
+                              );
+                            })}
                           </div>
                         )}
                       </div>
 
                       <div className="space-y-3 border-l border-border pl-6">
-                        <h4 className="text-sm font-medium text-text-secondary">Model Catalog (chat)</h4>
+                        <h4 className="text-sm font-medium text-text-secondary">Configured Models (chat)</h4>
                         <input type="text" placeholder="Search models..." value={searchTerms[opName] || ''} onChange={e => setSearchTerms({...searchTerms, [opName]: e.target.value})} className="w-full px-3 py-1.5 border border-border rounded-btn text-sm focus:ring-2 focus:ring-primary/20 bg-background" />
                         <div className="max-h-64 overflow-y-auto space-y-4 pr-2 custom-scrollbar">
                           {Object.entries(providerGroups).map(([provider, models]) => (
@@ -668,6 +687,96 @@ export default function ConfiguratorBuilder() {
                 );
               })
             )}
+          </div>
+
+          {/* Restrictions Section */}
+          <div className="bg-white p-6 rounded-xl border border-border shadow-sm">
+            <h2 className="text-base font-semibold text-text-primary mb-6">Overall Restrictions</h2>
+            
+            {/* TPM Slider */}
+            <div className="mb-6">
+              <div className="flex items-center justify-between mb-3">
+                <label className="text-sm font-medium text-text-secondary">Tokens Per Minute (TPM)</label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    min="100"
+                    max="10000000"
+                    value={restrictions.tpm}
+                    onChange={e => setRestrictions({...restrictions, tpm: Math.max(1, parseInt(e.target.value) || 1)})}
+                    className="w-28 px-3 py-1.5 border border-border rounded-btn text-sm text-right font-mono font-semibold text-primary bg-background focus:ring-2 focus:ring-primary/20 focus:border-primary"
+                  />
+                </div>
+              </div>
+              <div className="relative group">
+                <input
+                  type="range"
+                  min="100"
+                  max="10000000"
+                  step="100"
+                  value={restrictions.tpm}
+                  onChange={e => setRestrictions({...restrictions, tpm: parseInt(e.target.value)})}
+                  className="tpm-slider w-full h-2 rounded-full appearance-none cursor-pointer"
+                  style={{
+                    background: `linear-gradient(to right, var(--color-primary) 0%, var(--color-primary) ${((restrictions.tpm - 100) / (10000000 - 100)) * 100}%, #e5e7eb ${((restrictions.tpm - 100) / (10000000 - 100)) * 100}%, #e5e7eb 100%)`
+                  }}
+                />
+                <div className="flex justify-between mt-1.5">
+                  <span className="text-[10px] text-text-tertiary font-mono">100</span>
+                  <span className="text-[10px] text-text-tertiary font-mono">10M</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Auto-calculated RPM & TPR */}
+            <div className="grid grid-cols-2 gap-4">
+              <div className="p-4 bg-surface rounded-lg border border-border">
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-xs font-medium text-text-secondary">Requests Per Minute (RPM)</span>
+                  <span className="text-[10px] text-primary bg-primary/10 px-1.5 py-0.5 rounded font-medium">Auto</span>
+                </div>
+                <div className="flex items-baseline gap-1">
+                  <span className="text-2xl font-bold text-text-primary font-mono">{restrictions.rpm?.toLocaleString() || 0}</span>
+                  <span className="text-xs text-text-tertiary">req/min</span>
+                </div>
+                <p className="text-[10px] text-text-tertiary mt-1">= TPM ÷ TPR = {restrictions.tpm?.toLocaleString()} ÷ {restrictions.tpr?.toLocaleString()}</p>
+              </div>
+              <div className="p-4 bg-surface rounded-lg border border-border group relative">
+                <div className="flex items-center justify-between mb-1">
+                  <span className="flex items-center gap-1 text-xs font-medium text-text-secondary cursor-help">
+                    Tokens Per Request (TPR)
+                    <InformationCircleIcon className="w-3.5 h-3.5 text-text-tertiary" />
+                  </span>
+                  <span className="text-[10px] text-primary bg-primary/10 px-1.5 py-0.5 rounded font-medium">Auto</span>
+                </div>
+                <div className="flex items-baseline gap-1">
+                  <span className="text-2xl font-bold text-text-primary font-mono">{restrictions.tpr?.toLocaleString() || 0}</span>
+                  <span className="text-xs text-text-tertiary">tokens/req</span>
+                </div>
+                <p className="text-[10px] text-text-tertiary mt-1">= min(max_output_tokens) across all models</p>
+                
+                {/* Tooltip */}
+                <div className="absolute bottom-full left-0 mb-2 w-64 p-2.5 bg-gray-800 text-white text-xs rounded-lg shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-20">
+                  <p className="font-medium mb-1">Formula:</p>
+                  <p>Takes the minimum <code className="bg-gray-700 px-1 rounded">max_output_tokens</code> across all models selected in your fallback chains. This represents the bottleneck — your chain can't exceed the weakest model's output capacity.</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Guardrails Section */}
+          <div className="bg-white p-6 rounded-xl border border-border shadow-sm">
+            <h2 className="text-base font-semibold text-text-primary mb-4">Guardrails</h2>
+            <div className="flex gap-8">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" checked={guardrails.pii_masking} onChange={e => setGuardrails({...guardrails, pii_masking: e.target.checked})} className="w-4 h-4 text-primary rounded border-gray-300 focus:ring-primary" />
+                <span className="text-sm font-medium text-text-secondary">PII Masking</span>
+              </label>
+              <label className="flex items-center gap-2 opacity-60 cursor-not-allowed">
+                <input type="checkbox" disabled checked={guardrails.profanity_filter} className="w-4 h-4 text-primary rounded border-gray-300 focus:ring-primary" />
+                <span className="text-sm font-medium text-text-secondary">Profanity Filter <span className="text-[10px] bg-surface px-1.5 py-0.5 rounded text-text-tertiary uppercase ml-1">Coming Soon</span></span>
+              </label>
+            </div>
           </div>
 
           {/* Footer Actions */}

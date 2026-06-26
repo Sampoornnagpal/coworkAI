@@ -113,6 +113,7 @@ class CatalogModel(BaseModel):
     mode: str
     supports_vision: bool
     max_tokens: Optional[int]
+    max_output_tokens: Optional[int] = None
 
 class EndpointSpec(BaseModel):
     operation: str
@@ -143,3 +144,9 @@ class UsageLogEntry(BaseModel):
     success: bool
     error: Optional[str]
     created_at: str
+
+class GlobalModelCreate(BaseModel):
+    litellm_model: str
+    provider: str
+    api_key: Optional[str] = None
+    api_base: Optional[str] = None

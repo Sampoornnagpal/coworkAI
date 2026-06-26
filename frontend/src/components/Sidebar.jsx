@@ -1,7 +1,7 @@
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { useAuth } from '../context/AuthContext';
-import { ChatBubbleLeftIcon, ArrowUpTrayIcon, ChartBarIcon, ArrowRightOnRectangleIcon, CpuChipIcon, LinkIcon, UserGroupIcon } from '@heroicons/react/24/outline';
+import { ChatBubbleLeftIcon, ArrowUpTrayIcon, ChartBarIcon, ArrowRightOnRectangleIcon, CpuChipIcon, LinkIcon, UserGroupIcon, AdjustmentsHorizontalIcon } from '@heroicons/react/24/outline';
 
 const sidebarVariants = {
   hidden: { x: -240 },
@@ -64,6 +64,8 @@ export default function Sidebar() {
     navItems.push({ name: 'Admin Dashboard', path: '/admin', icon: ChartBarIcon });
     navItems.push({ name: 'MCP Servers', path: '/mcp-servers', icon: LinkIcon });
     navItems.push({ name: 'Agents', path: '/agents', icon: UserGroupIcon });
+    navItems.push({ name: 'LLM Configs', path: '/llm-configurator', icon: AdjustmentsHorizontalIcon });
+    navItems.push({ name: 'LLM Catalogue', path: '/llm-catalogue', icon: CpuChipIcon });
   }
 
   return (

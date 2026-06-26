@@ -8,6 +8,10 @@ import Admin from './pages/Admin';
 import Models from './pages/Models';
 import MCPServers from './pages/MCPServers';
 import Agents from './pages/Agents';
+import ConfiguratorList from './pages/LLMConfigurator/ConfiguratorList';
+import ConfiguratorBuilder from './pages/LLMConfigurator/ConfiguratorBuilder';
+import ConfiguratorDetail from './pages/LLMConfigurator/ConfiguratorDetail';
+import LLMCatalogue from './pages/LLMConfigurator/LLMCatalogue';
 
 function Protected({ children }) {
   const { user, loading } = useAuth();
@@ -46,6 +50,11 @@ export default function App() {
           <Route path="/models" element={<Protected><Models /></Protected>} />
           <Route path="/mcp-servers" element={<Protected><MCPServers /></Protected>} />
           <Route path="/agents" element={<Protected><Agents /></Protected>} />
+          <Route path="/llm-configurator" element={<Protected><ConfiguratorList /></Protected>} />
+          <Route path="/llm-configurator/new" element={<Protected><ConfiguratorBuilder /></Protected>} />
+          <Route path="/llm-configurator/:fullName" element={<Protected><ConfiguratorDetail /></Protected>} />
+          <Route path="/llm-configurator/:fullName/edit" element={<Protected><ConfiguratorBuilder /></Protected>} />
+          <Route path="/llm-catalogue" element={<Protected><LLMCatalogue /></Protected>} />
           <Route path="*" element={<Navigate to={user ? '/' : '/login'} replace />} />
         </Routes>
       </div>

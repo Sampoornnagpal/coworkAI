@@ -85,6 +85,13 @@ def get_models_catalog(provider_filter: str = None, mode_filter: str = None, que
                 except (ValueError, TypeError):
                     max_tokens = None
                     
+            max_output_tokens = details.get("max_output_tokens")
+            if max_output_tokens is not None:
+                try:
+                    max_output_tokens = int(max_output_tokens)
+                except (ValueError, TypeError):
+                    max_output_tokens = None
+                    
             supports_vision = bool(details.get("supports_vision"))
             
             results.append(CatalogModel(
@@ -92,7 +99,8 @@ def get_models_catalog(provider_filter: str = None, mode_filter: str = None, que
                 model_key=model_key,
                 mode=mode,
                 supports_vision=supports_vision,
-                max_tokens=max_tokens
+                max_tokens=max_tokens,
+                max_output_tokens=max_output_tokens
             ))
         except Exception as e:
             logger.warning(f"Skipping model {model_key}: {e}")

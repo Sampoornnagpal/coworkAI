@@ -38,6 +38,17 @@ def init_db():
                 created_at TEXT NOT NULL
             )
         ''')
+
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS global_models (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                litellm_model TEXT UNIQUE NOT NULL,
+                provider TEXT NOT NULL,
+                api_key TEXT,
+                api_base TEXT,
+                created_at TEXT NOT NULL
+            )
+        ''')
         conn.commit()
 
 @contextmanager
@@ -122,3 +133,34 @@ def get_usage_stats(config_full_name: str) -> dict:
         "agents": agents,
         "recent_logs": logs
     }
+
+def get_global_models() -> list[dict]:
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('SELECT * FROM global_models')
+        return [dict(row) for row in cursor.fetchall()]
+
+def add_global_model(litellm_model: str, provider: str, api_key: str, api_base: str):
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT INTO global_models (litellm_model, provider, api_key, api_base, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(litellm_model) DO UPDATE SET 
+                provider=excluded.provider,
+                api_key=excluded.api_key, 
+                api_base=excluded.api_base
+        ''', (
+            litellm_model,
+            provider,
+            api_key,
+            api_base,
+            datetime.now(timezone.utc).isoformat()
+        ))
+        conn.commit()
+
+def delete_global_model(litellm_model: str):
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('DELETE FROM global_models WHERE litellm_model = ?', (litellm_model,))
+        conn.commit()

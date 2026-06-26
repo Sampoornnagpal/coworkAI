@@ -41,3 +41,39 @@ body {
 @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
 
 .anim-fade { animation: fadeIn .3s ease-out both; }
+
+/* TPM Range Slider */
+.tpm-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  outline: none;
+  transition: background 0.2s;
+}
+.tpm-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--color-primary);
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.4);
+  border: 3px solid white;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.tpm-slider::-webkit-slider-thumb:hover {
+  transform: scale(1.15);
+  box-shadow: 0 3px 12px rgba(37, 99, 235, 0.5);
+}
+.tpm-slider::-webkit-slider-thumb:active {
+  transform: scale(1.25);
+}
+.tpm-slider::-moz-range-thumb {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--color-primary);
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.4);
+  border: 3px solid white;
+}
